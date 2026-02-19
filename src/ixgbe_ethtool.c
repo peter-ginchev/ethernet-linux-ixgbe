@@ -161,11 +161,17 @@ static struct ixgbe_stats ixgbe_gstrings_stats[] = {
 #define IXGBE_VF_STATS_LEN \
 	((((struct ixgbe_adapter *)netdev_priv(netdev))->num_vfs) * \
 	  (sizeof(struct vf_stats) / sizeof(u64)))
+#ifdef IXGBE_ETQF_PACKET_COUNTERS
+#define IXGBE_ETYPE_FILTER_STATS_LEN IXGBE_MAX_ETQF_FILTERS
+#else
+#define IXGBE_ETYPE_FILTER_STATS_LEN 0
+#endif
 #define IXGBE_STATS_LEN (IXGBE_GLOBAL_STATS_LEN + \
 			 IXGBE_NETDEV_STATS_LEN + \
 			 IXGBE_PB_STATS_LEN + \
 			 IXGBE_QUEUE_STATS_LEN + \
-			 IXGBE_VF_STATS_LEN)
+			 IXGBE_VF_STATS_LEN + \
+			 IXGBE_ETYPE_FILTER_STATS_LEN)
 
 #endif /* ETHTOOL_GSTATS */
 #ifdef ETHTOOL_TEST
@@ -2223,6 +2229,11 @@ static void ixgbe_get_ethtool_stats(struct net_device *netdev,
 		data_index += 3;
 #endif
 	}
+#ifdef IXGBE_ETQF_PACKET_COUNTERS
+	for (i = 0; i < IXGBE_ETYPE_FILTER_STATS_LEN; i++) {
+		data[data_index++] = adapter->etqf_hit_pkts[i];
+	}
+#endif
 	for (i = 0; i < IXGBE_NUM_RX_QUEUES; i++) {
 		ring = adapter->rx_ring[i];
 		if (!ring) {
@@ -2326,6 +2337,13 @@ static void ixgbe_get_strings(struct net_device *netdev, u32 stringset,
 			p += ETH_GSTRING_LEN;
 #endif /* BP_EXTENDED_STATS */
 		}
+#ifdef IXGBE_ETQF_PACKET_COUNTERS
+		for (i = 0; i < IXGBE_ETYPE_FILTER_STATS_LEN; i++) {
+			snprintf(p, ETH_GSTRING_LEN,
+				 "rx_etype_filter_%u_packets", i);
+			p += ETH_GSTRING_LEN;
+		}
+#endif
 		for (i = 0; i < IXGBE_NUM_RX_QUEUES; i++) {
 			snprintf(p, ETH_GSTRING_LEN,
 				 "rx_queue_%u_packets", i);
