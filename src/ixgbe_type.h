@@ -2069,8 +2069,11 @@ enum {
  *	LLDP (0x88CC):	 Filter 5
  *	LACP (0x8809):	 Filter 6
  *	FC   (0x8808):	 Filter 7
+ *
+ * Filter 1 is currently reserved for user defined filtering (i.e. ethtool)
  */
 #define IXGBE_ETQF_FILTER_EAPOL		0
+#define IXGBE_ETQF_FILTER_USER		1
 #define IXGBE_ETQF_FILTER_FCOE		2
 #define IXGBE_ETQF_FILTER_1588		3
 #define IXGBE_ETQF_FILTER_FIP		4

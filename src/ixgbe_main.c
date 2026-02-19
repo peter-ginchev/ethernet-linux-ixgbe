@@ -7295,6 +7295,23 @@ skip_free:
 #endif
 }
 
+static void ixgbe_replay_etype_filters(struct ixgbe_adapter *adapter)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&adapter->etype_lock, flags);
+	if (!adapter->etype_user_rule->in_use) {
+		spin_unlock_irqrestore(&adapter->etype_lock, flags);
+		return;
+	}
+
+	ixgbe_write_etype_filter(adapter, IXGBE_ETQF_FILTER_USER,
+				adapter->etype_user_rule->proto,
+				adapter->etype_user_rule->queue,
+				0, false, 0);
+	spin_unlock_irqrestore(&adapter->etype_lock, flags);
+}
+
 static inline bool ixgbe_is_eee_enabled(struct ixgbe_adapter *adapter)
 {
 	return (adapter->eee_state == IXGBE_EEE_ENABLED);
@@ -7353,6 +7370,8 @@ static void ixgbe_configure(struct ixgbe_adapter *adapter)
 	/* configure FCoE L2 filters, redirection table, and Rx control */
 	ixgbe_configure_fcoe(adapter);
 #endif /* CONFIG_FCOE */
+
+	ixgbe_replay_etype_filters(adapter);
 
 	ixgbe_configure_tx(adapter);
 	ixgbe_configure_rx(adapter);
@@ -8815,6 +8834,14 @@ static int ixgbe_sw_init(struct ixgbe_adapter *adapter)
 	if (nr_cpu_ids > IXGBE_MAX_XDP_QS)
 		static_branch_enable(&ixgbe_xdp_locking_key);
 #endif
+
+	adapter->etype_user_rule = kzalloc(sizeof(*adapter->etype_user_rule),
+					  GFP_KERNEL);
+	if (!adapter->etype_user_rule) {
+		err = -ENOMEM;
+		goto out;
+	}
+	spin_lock_init(&adapter->etype_lock);
 out:
 	return err;
 }
@@ -15299,6 +15326,7 @@ err_sw_init:
 	iounmap(adapter->io_addr);
 	if (ixgbe_is_mac_E6xx(mac_type))
 		devlink_free(adapter->devlink);
+	kfree(adapter->etype_user_rule);
 err_alloc_devlink:
 
 err_ioremap:
@@ -15424,6 +15452,7 @@ static void ixgbe_remove(struct pci_dev *pdev)
 #endif /* HAVE_TC_SETUP_CLSU32 */
 	kfree(adapter->mac_table);
 	kfree(adapter->rss_key);
+	kfree(adapter->etype_user_rule);
 	bitmap_free(adapter->af_xdp_zc_qps);
 
 	disable_dev = !test_and_set_bit(__IXGBE_DISABLED, adapter->state);

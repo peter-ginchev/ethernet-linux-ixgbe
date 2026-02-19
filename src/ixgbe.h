@@ -923,6 +923,14 @@ enum ixgbe_eee_state {
 				 */
 };
 
+struct ixgbe_etype_rule {
+	bool in_use;
+	__u16 proto;  /* ethernet protocol */
+	u8 queue;     /* absolute Rx queue index (0..127) */
+	u64 action;
+};
+#define IXGBE_ETYPE_FDIR_LOC_IDX 0
+
 /* board specific private data structure */
 struct ixgbe_adapter {
 #if defined(NETIF_F_HW_VLAN_TX) || defined(NETIF_F_HW_VLAN_CTAG_TX)
@@ -1247,6 +1255,9 @@ struct ixgbe_adapter {
 	bool fw_emp_reset_disabled;
 
 	u64 etqf_hit_pkts[IXGBE_MAX_ETQF_FILTERS];
+
+	struct ixgbe_etype_rule *etype_user_rule;
+	spinlock_t etype_lock; /* protect etype_rules + regs programming */
 };
 
 static inline unsigned int ixgbe_determine_xdp_q_idx(unsigned int cpu)
@@ -1372,6 +1383,9 @@ void ixgbe_clear_rscctl(struct ixgbe_adapter *adapter,
 #if defined(HAVE_UDP_ENC_RX_OFFLOAD) || defined(HAVE_VXLAN_RX_OFFLOAD)
 void ixgbe_clear_udp_tunnel_port(struct ixgbe_adapter *, u32);
 #endif
+void ixgbe_write_etype_filter(struct ixgbe_adapter *adapter, int slot,
+				     __u16 proto, u8 queue, u32 flags,
+				     bool pool_en, u8 pool);
 int ixgbe_update_ethtool_fdir_entry(struct ixgbe_adapter *adapter,
 				    struct ixgbe_fdir_filter *input,
 				    u16 sw_idx);

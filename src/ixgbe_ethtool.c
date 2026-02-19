@@ -4223,18 +4223,18 @@ err_out:
 
 static int ixgbe_get_ethtool_fdir_all(struct ixgbe_adapter *adapter,
 				      struct ethtool_rxnfc *cmd,
-				      u32 *rule_locs)
+				      u32 *rule_locs, u32 max_rules)
 {
 	struct hlist_node *node2;
 	struct ixgbe_fdir_filter *rule;
-	int cnt = 0;
+	int cnt = cmd->rule_cnt;
 
 	/* report total rule count */
-	cmd->data = (1024 << adapter->fdir_pballoc) - 2;
+	cmd->data += (1024 << adapter->fdir_pballoc) - 2;
 
 	hlist_for_each_entry_safe(rule, node2,
 				  &adapter->fdir_filter_list, fdir_node) {
-		if (cnt == cmd->rule_cnt)
+		if (cnt >= max_rules)
 			return -EMSGSIZE;
 		rule_locs[cnt] = rule->sw_idx;
 		cnt++;
@@ -4287,6 +4287,177 @@ static int ixgbe_get_rss_hash_opts(struct ixgbe_adapter *adapter,
 	return 0;
 }
 
+void ixgbe_write_etype_filter(struct ixgbe_adapter *adapter, int slot,
+				     __u16 proto, u8 queue, u32 flags,
+				     bool pool_en, u8 pool)
+{
+	struct ixgbe_hw *hw = &adapter->hw;
+	u32 etqf = 0, etqs = 0;
+
+	/* ETQF: set ETYPE + FILTER_ENABLE (+optional POOL)
+	 * Etype proto is little-endian, according to the datasheet */
+	etqf |= cpu_to_le16(proto);
+	if (pool_en) {
+		etqf |= IXGBE_ETQF_POOL_ENABLE;
+		etqf |= ((u32)pool << IXGBE_ETQF_POOL_SHIFT);
+	}
+	etqf |= flags;
+	etqf |= IXGBE_ETQF_FILTER_EN;
+
+	etqs |= ((u32)queue << IXGBE_ETQS_RX_QUEUE_SHIFT) & IXGBE_ETQS_RX_QUEUE;
+	etqs |= IXGBE_ETQS_QUEUE_EN;
+
+	e_info(drv,
+		"L2 EType filter prog slot=%d ETQF=0x%08x ETQS=0x%08x\n",
+		slot, etqf, etqs);
+
+	IXGBE_WRITE_REG(hw, IXGBE_ETQF(slot), etqf);
+	IXGBE_WRITE_REG(hw, IXGBE_ETQS(slot), etqs);
+	IXGBE_WRITE_FLUSH(hw);
+}
+
+static void ixgbe_clear_etype_filter(struct ixgbe_adapter *adapter, int slot)
+{
+	struct ixgbe_hw *hw = &adapter->hw;
+
+	e_info(drv, "L2 EType filter clear slot=%d\n", slot);
+
+	IXGBE_WRITE_REG(hw, IXGBE_ETQF(slot), 0);
+	IXGBE_WRITE_REG(hw, IXGBE_ETQS(slot), 0);
+	IXGBE_WRITE_FLUSH(hw);
+}
+
+static int ixgbe_add_ethtool_etype_rule(struct ixgbe_adapter *adapter,
+				       struct ethtool_rxnfc *cmd)
+{
+	struct ethtool_rx_flow_spec *fsp = (void *)&cmd->fs;
+	struct ixgbe_hw *hw = &adapter->hw;
+	unsigned long flags;
+	u8 queue;
+	u32 ring;
+
+	/* location == ETQF slot (0..7), only one slot is available for the user,
+	 * see IXGBE_ETQF_FILTER_ for the definitions of how other slots are used */
+	if (fsp->location != IXGBE_ETYPE_FDIR_LOC_IDX) {
+		e_warn(drv, "Loc %d cannot be used for L2 Etype filtering, only %d is supported\n",
+			fsp->location, IXGBE_ETYPE_FDIR_LOC_IDX);
+		return -EINVAL;
+	}
+
+	if (fsp->flow_type != ETHER_FLOW)
+		return -EINVAL;
+
+	/* only exact EtherType match */
+	if (fsp->m_u.ether_spec.h_proto &&
+	    fsp->m_u.ether_spec.h_proto != 0xFFFF)
+		return -EOPNOTSUPP;
+
+	/* IOV not supported */
+	if ((hw->mac.type >= ixgbe_mac_X550) &&
+	    (adapter->flags & IXGBE_FLAG_SRIOV_ENABLED))
+		return -EOPNOTSUPP;
+
+	if (fsp->ring_cookie == RX_CLS_FLOW_DISC)
+		return -EOPNOTSUPP; /* EtherType filter block doesn’t define a drop bit */
+
+	ring = ethtool_get_flow_spec_ring(fsp->ring_cookie);
+	if (ring >= adapter->num_rx_queues)
+		return -EINVAL;
+
+	queue = adapter->rx_ring[ring]->reg_idx;
+
+	spin_lock_irqsave(&adapter->etype_lock, flags);
+
+	if (adapter->etype_user_rule->in_use) {
+		spin_unlock_irqrestore(&adapter->etype_lock, flags);
+		return -EEXIST;
+	}
+
+	{
+		/* ethtool h_proto is network byte order */
+		u16 proto = ntohs(fsp->h_u.ether_spec.h_proto);
+
+		ixgbe_write_etype_filter(adapter, IXGBE_ETQF_FILTER_USER,
+					proto, queue, 0, false, 0);
+
+		adapter->etype_user_rule->in_use  = true;
+		adapter->etype_user_rule->proto   = proto;
+		adapter->etype_user_rule->queue   = queue;
+		adapter->etype_user_rule->action  = fsp->ring_cookie;
+	}
+
+	spin_unlock_irqrestore(&adapter->etype_lock, flags);
+	return 0;
+}
+
+static int ixgbe_del_ethtool_etype_rule(struct ixgbe_adapter *adapter,
+				       struct ethtool_rxnfc *cmd)
+{
+	struct ethtool_rx_flow_spec *fsp = (void *)&cmd->fs;
+	unsigned long flags;
+
+	if (fsp->location != IXGBE_ETYPE_FDIR_LOC_IDX)
+		return -EINVAL;
+
+	spin_lock_irqsave(&adapter->etype_lock, flags);
+
+	if (!adapter->etype_user_rule->in_use) {
+		spin_unlock_irqrestore(&adapter->etype_lock, flags);
+		return -ENOENT;
+	}
+
+	ixgbe_clear_etype_filter(adapter, IXGBE_ETQF_FILTER_USER);
+	memset(adapter->etype_user_rule, 0, sizeof(*adapter->etype_user_rule));
+
+	spin_unlock_irqrestore(&adapter->etype_lock, flags);
+	return 0;
+}
+
+static int ixgbe_get_etype_rule(struct ixgbe_adapter *adapter,
+				struct ethtool_rxnfc *cmd)
+{
+	struct ethtool_rx_flow_spec *fsp = (void *)&cmd->fs;
+	unsigned long flags;
+
+	spin_lock_irqsave(&adapter->etype_lock, flags);
+	if (!adapter->etype_user_rule->in_use) {
+		spin_unlock_irqrestore(&adapter->etype_lock, flags);
+		return -ENOENT;
+	}
+
+	fsp->flow_type = ETHER_FLOW;
+	fsp->location  = IXGBE_ETYPE_FDIR_LOC_IDX;
+	/* proto stored in hardware format; convert back for ethtool API */
+	fsp->h_u.ether_spec.h_proto = htons(adapter->etype_user_rule->proto);
+	fsp->m_u.ether_spec.h_proto = 0xFFFF;
+
+	fsp->ring_cookie = adapter->etype_user_rule->action;
+
+	spin_unlock_irqrestore(&adapter->etype_lock, flags);
+	return 0;
+}
+
+static int ixgbe_get_etype_all(struct ixgbe_adapter *adapter,
+			      struct ethtool_rxnfc *cmd, u32 *rule_locs,
+			      u32 max_rules)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&adapter->etype_lock, flags);
+	if (!adapter->etype_user_rule->in_use) {
+		spin_unlock_irqrestore(&adapter->etype_lock, flags);
+		return 0;
+	}
+	spin_unlock_irqrestore(&adapter->etype_lock, flags);
+	if (cmd->rule_cnt >= max_rules)
+		return -EMSGSIZE;
+	rule_locs[cmd->rule_cnt] = IXGBE_ETYPE_FDIR_LOC_IDX;
+
+	cmd->rule_cnt++;
+	cmd->data++;
+	return 0;
+}
+
 /**
  * ixgbe_get_rxnfc - Retrieve RX network flow classification settings
  * @dev: Network device structure
@@ -4316,16 +4487,29 @@ static int ixgbe_get_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd,
 		ret = 0;
 		break;
 	case ETHTOOL_GRXCLSRLCNT:
-		cmd->rule_cnt = adapter->fdir_filter_count;
+		cmd->rule_cnt = adapter->fdir_filter_count +
+			(adapter->etype_user_rule->in_use ? 1 : 0);
 		ret = 0;
 		break;
 	case ETHTOOL_GRXCLSRULE:
-		ret = ixgbe_get_ethtool_fdir_entry(adapter, cmd);
+		if (cmd->fs.location == IXGBE_ETYPE_FDIR_LOC_IDX)
+			ret = ixgbe_get_etype_rule(adapter, cmd);
+		else
+			ret = ixgbe_get_ethtool_fdir_entry(adapter, cmd);
 		break;
-	case ETHTOOL_GRXCLSRLALL:
-		ret = ixgbe_get_ethtool_fdir_all(adapter, cmd,
-						 (u32 *)rule_locs);
+	case ETHTOOL_GRXCLSRLALL: {
+		u32 buf_size = cmd->rule_cnt;
+
+		ret = 0;
+		/* we want to display the Ethernet rule first */
+		cmd->data = 0; /* reuse data field to report total rule count */
+		cmd->rule_cnt = 0; /* start rule location count from 0 */
+		ret += ixgbe_get_etype_all(adapter, cmd, (u32 *)rule_locs,
+					   buf_size);
+		ret += ixgbe_get_ethtool_fdir_all(adapter, cmd,
+						  (u32 *)rule_locs, buf_size);
 		break;
+	}
 	case ETHTOOL_GRXFH:
 		ret = ixgbe_get_rss_hash_opts(adapter, cmd);
 		break;
@@ -4508,6 +4692,10 @@ static int ixgbe_add_ethtool_fdir_entry(struct ixgbe_adapter *adapter,
 	/* Don't allow indexes to exist outside of available space */
 	if (fsp->location >= ((1024 << adapter->fdir_pballoc) - 2)) {
 		e_err(drv, "Location out of range\n");
+		return -EINVAL;
+	}
+	if (fsp->location == IXGBE_ETYPE_FDIR_LOC_IDX) {
+		e_warn(drv, "Loc %d is used by L2 Etype filtering\n", fsp->location);
 		return -EINVAL;
 	}
 
@@ -4804,10 +4992,16 @@ static int ixgbe_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *cmd)
 
 	switch (cmd->cmd) {
 	case ETHTOOL_SRXCLSRLINS:
-		ret = ixgbe_add_ethtool_fdir_entry(adapter, cmd);
+		if (cmd->fs.flow_type == ETHER_FLOW)
+			ret = ixgbe_add_ethtool_etype_rule(adapter, cmd);
+		else
+			ret = ixgbe_add_ethtool_fdir_entry(adapter, cmd);
 		break;
 	case ETHTOOL_SRXCLSRLDEL:
-		ret = ixgbe_del_ethtool_fdir_entry(adapter, cmd);
+		if (cmd->fs.location == IXGBE_ETYPE_FDIR_LOC_IDX)
+			ret = ixgbe_del_ethtool_etype_rule(adapter, cmd);
+		else
+			ret = ixgbe_del_ethtool_fdir_entry(adapter, cmd);
 		break;
 	case ETHTOOL_SRXFH:
 		ret = ixgbe_set_rss_hash_opt(adapter, cmd);
