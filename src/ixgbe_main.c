@@ -5011,6 +5011,14 @@ static void ixgbe_setup_mrqc(struct ixgbe_adapter *adapter)
 	u32 mrqc = 0, rss_field = 0;
 	u32 vfmrqc = 0;
 
+	if (adapter->flags2 & IXGBE_FLAG2_DISABLE_RSS) {
+		/* RSS is mutually exclusive with UDP fragmentation checksum offload */
+		rxcsum = IXGBE_READ_REG(hw, IXGBE_RXCSUM);
+		rxcsum &= ~IXGBE_RXCSUM_PCSD;
+		IXGBE_WRITE_REG(hw, IXGBE_RXCSUM, rxcsum);
+		IXGBE_WRITE_REG(hw, IXGBE_MRQC, mrqc);
+		return;
+	}
 	/* Disable indicating checksum in descriptor, enables RSS hash */
 	rxcsum = IXGBE_READ_REG(hw, IXGBE_RXCSUM);
 	rxcsum |= IXGBE_RXCSUM_PCSD;

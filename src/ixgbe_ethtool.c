@@ -187,6 +187,8 @@ static const char ixgbe_priv_flags_strings[][ETH_GSTRING_LEN] = {
 #endif
 #define IXGBE_PRIV_FLAGS_AUTO_DISABLE_VF	BIT(2)
 	"mdd-disable-vf",
+#define IXGBE_PRIV_FLAGS_DISABLE_RSS	BIT(3)
+	"disable-rss",
 };
 
 #define IXGBE_PRIV_FLAGS_STR_LEN ARRAY_SIZE(ixgbe_priv_flags_strings)
@@ -5788,6 +5790,8 @@ static u32 ixgbe_get_priv_flags(struct net_device *netdev)
 #endif
 	if (adapter->flags2 & IXGBE_FLAG2_AUTO_DISABLE_VF)
 		priv_flags |= IXGBE_PRIV_FLAGS_AUTO_DISABLE_VF;
+	if (adapter->flags2 & IXGBE_FLAG2_DISABLE_RSS)
+		priv_flags |= IXGBE_PRIV_FLAGS_DISABLE_RSS;
 
 	return priv_flags;
 }
@@ -5855,6 +5859,10 @@ static int ixgbe_set_priv_flags(struct net_device *netdev, u32 priv_flags)
 			return -EOPNOTSUPP;
 		}
 	}
+
+	flags2 &= ~IXGBE_FLAG2_DISABLE_RSS;
+	if (priv_flags & IXGBE_PRIV_FLAGS_DISABLE_RSS)
+		 flags2 |= IXGBE_FLAG2_DISABLE_RSS;
 
 	if (flags != adapter->flags) {
 		adapter->flags = flags;
