@@ -711,6 +711,14 @@ int ixgbe_clean_rx_irq_zc(struct ixgbe_q_vector *q_vector,
 			continue;
 		}
 
+#ifdef IXGBE_ETQF_PACKET_COUNTERS
+		{
+			int idx = ixgbe_desc_get_etqf_idx(rx_desc);
+
+			if (idx >= 0)
+				adapter->etqf_hit_pkts[idx]++;
+		}
+#endif
 #ifndef HAVE_MEM_TYPE_XSK_BUFF_POOL
 		if (unlikely(bi->skb)) {
 			ixgbe_reuse_rx_buffer_zc(rx_ring, bi);

@@ -1246,6 +1246,9 @@ struct ixgbe_adapter {
 #endif /* HAVE_DEVLINK_REGIONS */
 	bool fw_emp_reset_disabled;
 
+#ifdef IXGBE_ETQF_PACKET_COUNTERS
+	u64 etqf_hit_pkts[IXGBE_MAX_ETQF_FILTERS];
+#endif
 };
 
 static inline unsigned int ixgbe_determine_xdp_q_idx(unsigned int cpu)
