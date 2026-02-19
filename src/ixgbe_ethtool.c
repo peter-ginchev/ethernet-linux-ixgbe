@@ -1120,7 +1120,7 @@ static void ixgbe_set_msglevel(struct net_device *netdev, u32 data)
  */
 static int ixgbe_get_regs_len(struct net_device __always_unused *netdev)
 {
-#define IXGBE_REGS_LEN  1145
+#define IXGBE_REGS_LEN  1161
 	return IXGBE_REGS_LEN * sizeof(u32);
 }
 
@@ -1502,6 +1502,10 @@ static void ixgbe_get_regs(struct net_device *netdev, struct ethtool_regs *regs,
 	regs_buff[1143] = IXGBE_R32_Q(hw, IXGBE_SECRXCTRL);
 	regs_buff[1144] = IXGBE_R32_Q(hw, IXGBE_SECRXSTAT);
 
+	for (i = 0; i < 8; i++) {
+		regs_buff[1145 + i] = IXGBE_R32_Q(hw, IXGBE_ETQF(i));
+		regs_buff[1153 + i] = IXGBE_R32_Q(hw, IXGBE_ETQS(i));
+	}
 }
 
 /**
