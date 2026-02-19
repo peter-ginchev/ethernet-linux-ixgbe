@@ -1315,6 +1315,15 @@ static inline bool ixgbe_rx_is_fcoe(struct ixgbe_ring *ring,
 }
 #endif /* CONFIG_FCOE */
 
+static inline int ixgbe_desc_get_etqf_idx(const union ixgbe_adv_rx_desc *rx_desc)
+{
+    u16 pkttype = le16_to_cpu(rx_desc->wb.lower.lo_dword.hs_rss.pkt_info) & IXGBE_RXDADV_PKTTYPE_MASK;
+
+	if  (!(pkttype & IXGBE_RXDADV_PKTTYPE_ETQF))
+		return -1;
+	return (pkttype & IXGBE_RXDADV_PKTTYPE_ETQF_MASK) >> IXGBE_RXDADV_PKTTYPE_ETQF_SHIFT;
+}
+
 /**
  * ixgbe_rx_checksum - Indicate in skb if hardware indicated a good checksum
  * @ring: Structure containing ring-specific data
@@ -2648,6 +2657,9 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		/* update budget accounting */
 		total_rx_packets++;
 #endif /* HAVE_PTP_1588_CLOCK */
+		int idx = ixgbe_desc_get_etqf_idx(rx_desc);
+		if (idx >= 0)
+			adapter->etqf_hit_pkts[idx]++;
 	}
 
 	if (xdp_xmit & IXGBE_XDP_REDIR)
@@ -2819,6 +2831,10 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	rx_ring->stats.bytes += total_rx_bytes;
 	q_vector->rx.total_packets += total_rx_packets;
 	q_vector->rx.total_bytes += total_rx_bytes;
+
+	int idx = ixgbe_desc_get_etqf_idx(rx_desc);
+	if (idx >= 0)
+		adapter->etqf_hit_pkts[idx]++;
 
 	if (cleaned_count)
 		ixgbe_alloc_rx_buffers(rx_ring, cleaned_count);
