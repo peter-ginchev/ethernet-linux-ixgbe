@@ -2593,6 +2593,13 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		if (ixgbe_is_non_eop(rx_ring, rx_desc, skb))
 			continue;
 
+		{
+			int idx = ixgbe_desc_get_etqf_idx(rx_desc);
+
+			if (idx >= 0)
+				adapter->etqf_hit_pkts[idx]++;
+		}
+
 		/* verify the packet layout is correct */
 		if (ixgbe_cleanup_headers(rx_ring, rx_desc, skb))
 			continue;
@@ -2751,6 +2758,13 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 
 		if (ixgbe_is_non_eop(rx_ring, rx_desc, skb))
 			continue;
+
+		{
+			int idx = ixgbe_desc_get_etqf_idx(rx_desc);
+
+			if (idx >= 0)
+				q_vector->adapter->etqf_hit_pkts[idx]++;
+		}
 
 		dma_unmap_single(rx_ring->dev,
 				 IXGBE_CB(skb)->dma,

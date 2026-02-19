@@ -61,6 +61,17 @@ bool ixgbe_xsk_any_rx_ring_enabled(struct ixgbe_adapter *adapter);
 #endif /* HAVE_AF_XDP_ZC_SUPPORT */
 #endif /* HAVE_XDP_SUPPORT */
 
+static inline int ixgbe_desc_get_etqf_idx(const union ixgbe_adv_rx_desc *rx_desc)
+{
+	u16 pkttype = le16_to_cpu(rx_desc->wb.lower.lo_dword.hs_rss.pkt_info) &
+		      IXGBE_RXDADV_PKTTYPE_MASK;
+
+	if (!(pkttype & IXGBE_RXDADV_PKTTYPE_ETQF))
+		return -1;
+	return (pkttype & IXGBE_RXDADV_PKTTYPE_ETQF_MASK) >>
+	       IXGBE_RXDADV_PKTTYPE_ETQF_SHIFT;
+}
+
 bool ixgbe_cleanup_headers(struct ixgbe_ring __maybe_unused *rx_ring,
 			   union ixgbe_adv_rx_desc *rx_desc,
 			   struct sk_buff *skb);
