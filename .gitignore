@@ -1,0 +1,9 @@
+*.o
+.*.cmd
+/src/Module.symvers
+/src/ixgbe.ko
+/src/ixgbe.mod
+/src/ixgbe.mod.c
+/src/kcompat_generated_defs.h
+/src/modules.order
+
