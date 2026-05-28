@@ -1807,6 +1807,133 @@ s32 ixgbe_aci_set_event_mask(struct ixgbe_hw *hw, u8 port_num, u16 mask)
 }
 
 /**
+ * ixgbe_aci_read_mdio - read MDIO register value
+ * @hw: pointer to the hw struct
+ * @topo_addr: topology address for a device to communicate with
+ * @device_addr: MDIO device address
+ * @bus_address: MDIO bus address
+ * @offset: MDIO offset
+ * @data: pointer to data to be read from the MDIO device
+ *
+ * Read the value of the MDIO register using ACI command (0x06E4).
+ *
+ * Return: the exit code of the operation.
+ */
+s32 ixgbe_aci_read_mdio(struct ixgbe_hw *hw,
+			struct ixgbe_aci_cmd_link_topo_addr topo_addr,
+			u8 device_addr, u8 bus_address, u16 offset,
+			u16 *data)
+{
+	struct ixgbe_aci_desc desc;
+	struct ixgbe_aci_cmd_mdio *cmd;
+	s32 status;
+
+	ixgbe_fill_dflt_direct_cmd_desc(&desc, ixgbe_aci_opc_read_mdio);
+	cmd = &desc.params.read_mdio;
+
+	if (!data)
+		return IXGBE_ERR_PARAM;
+
+	cmd->topo_addr = topo_addr;
+	cmd->mdio_device_addr = device_addr;
+	cmd->mdio_bus_address = bus_address;
+	cmd->offset = IXGBE_CPU_TO_LE16(offset);
+
+	status = ixgbe_aci_send_cmd(hw, &desc, NULL, 0);
+	if (!status)
+		*data = IXGBE_LE16_TO_CPU(cmd->data);
+
+	return status;
+}
+
+/**
+ * ixgbe_get_thermal_sensor_data_E610 - Gather thermal sensor data on E610
+ * @hw: pointer to hardware structure
+ *
+ * Read the on-die temperature from PHY page 3, offset 0xDB0C using the
+ * Read MDIO ACI command, convert it to degrees Celsius and store the
+ * result in hw->mac.thermal_sensor_data. Only PF 0 is allowed to query
+ * the sensor; other PFs return IXGBE_NOT_IMPLEMENTED to keep a single
+ * hwmon node per device.
+ *
+ * Return: IXGBE_SUCCESS on success, IXGBE_NOT_IMPLEMENTED on non-PF-0,
+ *	   or a non-zero status propagated from the ACI call.
+ */
+s32 ixgbe_get_thermal_sensor_data_E610(struct ixgbe_hw *hw)
+{
+	static const struct ixgbe_aci_cmd_link_topo_addr topo_addr = {
+		.topo_params = {
+			.lport_num = 0,
+			.lport_num_valid = IXGBE_ACI_LINK_TOPO_PORT_NUM_VALID,
+			.node_type_ctx =
+				(IXGBE_ACI_LINK_TOPO_NODE_CTX_PORT <<
+				 IXGBE_ACI_LINK_TOPO_NODE_CTX_S) |
+				IXGBE_ACI_LINK_TOPO_NODE_TYPE_PHY,
+		},
+	};
+	struct ixgbe_thermal_sensor_data *data = &hw->mac.thermal_sensor_data;
+	s32 temp32;
+	u16 temp16;
+	s32 status;
+
+	DEBUGFUNC("ixgbe_get_thermal_sensor_data_E610");
+
+	if (hw->bus.func != 0)
+		return IXGBE_NOT_IMPLEMENTED;
+
+	status = ixgbe_aci_read_mdio(hw, topo_addr,
+				     3 | IXGBE_ACI_MDIO_CLAUSE_45, 0,
+				     0xDB0C, &temp16);
+	if (status)
+		return status;
+
+	memset(data, 0, sizeof(*data));
+	data->sensor[0].location = 1;
+
+	/* 12-bit signed value, then celsius = (raw * 905 + 1122000) / 10000 */
+	temp16 &= 0xFFF;
+	temp32 = (temp16 & 0x800) ? (s32)(0xFFFFF000 | temp16) : (s32)temp16;
+	data->sensor[0].temp = (u8)((temp32 * 905 + 1122000) / 10000);
+
+	/* MDIO does not expose thresholds; use conservative defaults so the
+	 * hwmon temp1_max / temp1_crit attributes are populated.
+	 */
+	data->sensor[0].caution_thresh = 100;
+	data->sensor[0].max_op_thresh = 110;
+
+	return IXGBE_SUCCESS;
+}
+
+/**
+ * ixgbe_init_thermal_sensor_thresh_E610 - Init thermal sensor thresholds
+ * @hw: pointer to hardware structure
+ *
+ * Probe the on-die sensor at init so the hwmon sysfs glue registers the
+ * temp/threshold attributes, and log the initial temperature.
+ *
+ * Return: IXGBE_SUCCESS on success, or a non-zero status that suppresses
+ *	   hwmon registration for this PF.
+ */
+s32 ixgbe_init_thermal_sensor_thresh_E610(struct ixgbe_hw *hw)
+{
+	s32 status;
+
+	DEBUGFUNC("ixgbe_init_thermal_sensor_thresh_E610");
+
+	status = ixgbe_get_thermal_sensor_data_E610(hw);
+	if (status == IXGBE_SUCCESS)
+		netdev_info(ixgbe_hw_to_netdev(hw),
+			    "E610 thermal sensor initialized, current temp: %d C\n",
+			    hw->mac.thermal_sensor_data.sensor[0].temp);
+	else if (status != IXGBE_NOT_IMPLEMENTED)
+		netdev_err(ixgbe_hw_to_netdev(hw),
+			   "E610 thermal sensor init failed, status: %d\n",
+			   status);
+
+	return status;
+}
+
+/**
  * ixgbe_configure_lse - enable/disable link status events
  * @hw: pointer to the HW struct
  * @activate: bool value deciding if lse should be enabled nor disabled
@@ -4723,8 +4850,8 @@ s32 ixgbe_init_ops_E610(struct ixgbe_hw *hw)
 	mac->ops.get_fw_tsam_mode = ixgbe_get_fw_tsam_mode_E610;
 	mac->ops.get_fw_version = ixgbe_aci_get_fw_ver;
 	mac->ops.get_nvm_version = ixgbe_get_active_nvm_ver;
-       mac->ops.get_thermal_sensor_data = NULL;
-       mac->ops.init_thermal_sensor_thresh = NULL;
+	mac->ops.get_thermal_sensor_data = ixgbe_get_thermal_sensor_data_E610;
+	mac->ops.init_thermal_sensor_thresh = ixgbe_init_thermal_sensor_thresh_E610;
 
 	/* PHY */
 	phy->ops.init = ixgbe_init_phy_ops_E610;

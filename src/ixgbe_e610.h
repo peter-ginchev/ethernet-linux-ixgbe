@@ -49,6 +49,12 @@ s32 ixgbe_aci_get_link_info(struct ixgbe_hw *hw, bool ena_lse,
 			    struct ixgbe_link_status *link);
 s32 ixgbe_aci_set_event_mask(struct ixgbe_hw *hw, u8 port_num, u16 mask);
 s32 ixgbe_configure_lse(struct ixgbe_hw *hw, bool activate, u16 mask);
+s32 ixgbe_aci_read_mdio(struct ixgbe_hw *hw,
+			struct ixgbe_aci_cmd_link_topo_addr topo_addr,
+			u8 device_addr, u8 bus_address, u16 offset,
+			u16 *data);
+s32 ixgbe_get_thermal_sensor_data_E610(struct ixgbe_hw *hw);
+s32 ixgbe_init_thermal_sensor_thresh_E610(struct ixgbe_hw *hw);
 
 #ifndef NO_PTP_SUPPORT
 s32 ixgbe_set_ptp_by_phy(struct ixgbe_hw *hw, u8 ptp_request, u8 flags);
